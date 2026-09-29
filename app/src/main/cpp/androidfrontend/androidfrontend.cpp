@@ -460,8 +460,19 @@ InputContext *AndroidFrontend::activeInputContext() const {
 void AndroidFrontend::deactivateInputContext(const int uid) {
     auto *ptr = icCache_.find(uid);
     if (!ptr) return;
-    focusGroup_.setFocusedInputContext(nullptr);
-    activeIC_ = nullptr;
+    // Guard both the focus-group clear and activeIC_ against stale deactivate jobs.
+    // In rapid bind/unbind/bind cycles a deactivate for an old uid can arrive after a new IC
+    // is already active. Two failure paths exist if we act unconditionally:
+    //   1. focusGroup_.setFocusedInputContext(nullptr) calls setHasFocus(false) on the new IC,
+    //      causing InputContext::keyEvent to return early on RETURN_IF_HAS_NO_FOCUS — engine
+    //      never processes keys, candidates freeze while text still appears via InputConnection.
+    //   2. activeIC_ = nullptr causes FlushUI events to be dropped (inputContext != activeIC_),
+    //      same frozen-candidate symptom.
+    // Only clear when the uid being deactivated actually owns the current active IC.
+    if (activeIC_ == dynamic_cast<AndroidInputContext *>(ptr->get())) {
+        focusGroup_.setFocusedInputContext(nullptr);
+        activeIC_ = nullptr;
+    }
 }
 
 void AndroidFrontend::setCapabilityFlags(uint64_t flag) {
